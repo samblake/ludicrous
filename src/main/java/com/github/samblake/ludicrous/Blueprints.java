@@ -247,17 +247,17 @@ final class Blueprints {
         }
         ClassName builder = ClassName.get(packageOf(creator.getEnclosingElement()), name);
 
-        Map<String, String> docs = parameterDocsOf(creator);
+        ParameterDocs docs = parameterDocsOf(creator);
         List<Argument> arguments = new ArrayList<>();
         for (VariableElement parameter : creator.getParameters()) {
             Optional<String> reader = settings.toBuilder()
                     ? readerOf(product, parameter, builder.packageName())
                     : Optional.empty();
-            Optional<String> doc = Optional.ofNullable(docs.get(parameter.getSimpleName().toString()));
+            Optional<String> doc = Optional.ofNullable(docs.descriptions().get(parameter.getSimpleName().toString()));
             arguments.add(new Argument(parameter, builder, settings.prefix(), reader, doc));
         }
 
-        Blueprint blueprint = new Blueprint(annotated, creator, product, builder, arguments);
+        Blueprint blueprint = new Blueprint(annotated, creator, product, builder, arguments, docs.markdown());
         return Plan.of(blueprint, problemsWith(blueprint));
     }
 
@@ -398,29 +398,38 @@ final class Blueprints {
     }
 
     /**
-     * Reads each {@code @param} description from the creator's Javadoc, which is only available when it is
-     * compiled from source.
+     * Each {@code @param} description, and whether they were written in a Markdown {@code ///} comment rather than a
+     * traditional {@code /** *}{@code /} one.
      */
-    private Map<String, String> parameterDocsOf(ExecutableElement creator) {
-        String doc = elements.getDocComment(creator);
+    private record ParameterDocs(Map<String, String> descriptions, boolean markdown) {
+    }
+
+    /**
+     * Reads each {@code @param} description from the creator's documentation comment, which is only available when
+     * it is compiled from source. Markdown comments use the same {@code @param} tags, so both are read the same way.
+     */
+    private ParameterDocs parameterDocsOf(ExecutableElement creator) {
+        Element documented = creator;
         // A record's canonical constructor is usually implicit, with its components documented on the record
         Element owner = creator.getEnclosingElement();
-        if (doc == null && owner.getKind() == ElementKind.RECORD
+        if (elements.getDocComment(creator) == null && owner.getKind() == ElementKind.RECORD
                 && creator.equals(canonicalConstructorOf((TypeElement) owner))) {
-            doc = elements.getDocComment(owner);
+            documented = owner;
         }
+        String doc = elements.getDocComment(documented);
         if (doc == null) {
-            return Collections.emptyMap();
+            return new ParameterDocs(Collections.emptyMap(), false);
         }
-        Map<String, String> docs = new HashMap<>();
+        Map<String, String> descriptions = new HashMap<>();
         Matcher matcher = PARAM_TAG.matcher(doc);
         while (matcher.find()) {
             String description = matcher.group(2).replaceAll("\\s+", " ").trim();
             if (!description.isEmpty()) {
-                docs.put(matcher.group(1), description);
+                descriptions.put(matcher.group(1), description);
             }
         }
-        return docs;
+        boolean markdown = elements.getDocCommentKind(documented) == Elements.DocCommentKind.END_OF_LINE;
+        return new ParameterDocs(descriptions, markdown);
     }
 
     private String packageOf(Element element) {

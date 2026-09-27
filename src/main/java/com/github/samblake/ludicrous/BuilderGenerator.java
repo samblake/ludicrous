@@ -148,8 +148,8 @@ final class BuilderGenerator {
                 .varargs(blueprint.creator.isVarArgs() && index == arguments.size() - 1)
                 .addStatement("return new $T<>($L)", builder,
                         join(map(arguments, other -> CodeBlock.of("$N", other.name))));
-        argument.doc.ifPresent(doc -> setter.addJavadoc("Sets {@code $L}.\n\n@param $L $L\n",
-                argument.name, argument.name, doc));
+        String summary = blueprint.markdownDocs ? "Sets `$L`.\n\n@param $L $L\n" : "Sets {@code $L}.\n\n@param $L $L\n";
+        argument.doc.ifPresent(doc -> setter.addJavadoc(summary, argument.name, argument.name, doc));
         return setter.build();
     }
 

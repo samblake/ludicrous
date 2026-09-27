@@ -164,9 +164,10 @@ its factory methods are both annotated.
 * Type annotations, such as a type use `@Nullable`, are kept at every level of the type, so
   `List<@Nullable String>` stays as it is on the setter's parameter and the builder's field.
 * A varargs final parameter stays varargs, so `.withTags("new", "sale")` works.
-* Each `@param` description in the constructor or method's Javadoc becomes the setter's Javadoc, so it shows up
-  in your IDE. For a record, the `@param` tags on the record itself are used, unless you've written a canonical
-  constructor with its own Javadoc.
+* Each `@param` description in the constructor or method's documentation comment becomes the setter's
+  documentation, so it shows up in your IDE. For a record, the `@param` tags on the record itself are used, unless
+  you've written a canonical constructor with its own comment. Markdown `///` comments stay Markdown, so the setters
+  get `///` comments too, and traditional `/** */` comments stay traditional.
 
 ## Bonus: `toBuilder`
 
@@ -248,7 +249,7 @@ OrderView redirected = OrderView.from(view.toBuilder()
 
 ## Adding it to a project
 
-Ludicrous needs Java 17 or later.
+Ludicrous needs Java 25 or later.
 
 ```xml
 <dependency>

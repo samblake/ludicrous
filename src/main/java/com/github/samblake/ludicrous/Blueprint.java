@@ -24,8 +24,11 @@ final class Blueprint {
     final ClassName builder;
     final List<Argument> arguments;
 
+    /** Whether the argument descriptions came from a Markdown {@code ///} comment, so the setters should use one. */
+    final boolean markdownDocs;
+
     Blueprint(Element annotated, ExecutableElement creator, TypeElement product, ClassName builder,
-            List<Argument> arguments) {
+            List<Argument> arguments, boolean markdownDocs) {
         this.annotated = annotated;
         this.settings = annotated.getAnnotation(Ludicrous.class);
         this.creator = creator;
@@ -33,6 +36,7 @@ final class Blueprint {
         this.product = product;
         this.builder = builder;
         this.arguments = arguments;
+        this.markdownDocs = markdownDocs;
     }
 
     boolean isConstructor() {

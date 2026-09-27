@@ -598,7 +598,7 @@ public class LudicrousProcessorTest {
         Result result = compile(Arrays.asList("--release", "8"), PERSON);
 
         assertThat(result.success, is(false));
-        assertThat(result.errors, containsString("Ludicrous needs Java 17 or later, but this is compiling for RELEASE_8"));
+        assertThat(result.errors, containsString("Ludicrous needs Java 25 or later, but this is compiling for RELEASE_8"));
     }
 
     @Test
@@ -686,6 +686,73 @@ public class LudicrousProcessorTest {
         String builder = generated("test/PersonBuilder.java");
         assertThat(builder, containsString("@param name from the constructor"));
         assertThat(builder, not(containsString("from the record")));
+    }
+
+    @Test
+    public void keepsMarkdownParamDocsAsMarkdown() {
+        Result result = compile(
+                "package test;\n"
+                + "@com.github.samblake.ludicrous.Ludicrous\n"
+                + "public class Person {\n"
+                + "    /// A person.\n"
+                + "    ///\n"
+                + "    /// @param name the person's **name**, see [String]\n"
+                + "    ///   as written\n"
+                + "    /// @param age\n"
+                + "    public Person(String name, int age) {}\n"
+                + "}\n");
+
+        assertThat(result.errors, result.success, is(true));
+        String builder = generated("test/PersonBuilder.java");
+        assertThat(builder, containsString("    /// Sets `name`.\n    ///\n"
+                + "    /// @param name the person's **name**, see [String] as written\n"));
+        assertThat(builder, not(containsString("/**")));
+        assertThat(builder, not(containsString("@param age")));
+    }
+
+    @Test
+    public void readsMarkdownParamDocsFromARecord() {
+        Result result = compile(
+                "package test;\n"
+                + "/// @param name the person's name\n"
+                + "@com.github.samblake.ludicrous.Ludicrous\n"
+                + "public record Person(String name) {}\n");
+
+        assertThat(result.errors, result.success, is(true));
+        assertThat(generated("test/PersonBuilder.java"), containsString("/// @param name the person's name"));
+    }
+
+    @Test
+    public void keepsTraditionalParamDocsTraditional() {
+        Result result = compile(
+                "package test;\n"
+                + "@com.github.samblake.ludicrous.Ludicrous\n"
+                + "public class Person {\n"
+                + "    /**\n"
+                + "     * @param name the person's name\n"
+                + "     */\n"
+                + "    public Person(String name) {}\n"
+                + "}\n");
+
+        assertThat(result.errors, result.success, is(true));
+        String builder = generated("test/PersonBuilder.java");
+        assertThat(builder, containsString("     * Sets {@code name}."));
+        assertThat(builder, not(containsString("///")));
+    }
+
+    @Test
+    public void buildsAClassInTheDefaultPackage() {
+        Result result = compile(
+                "@com.github.samblake.ludicrous.Ludicrous\n"
+                + "public class Person {\n"
+                + "    public Person(String name) {}\n"
+                + "}\n",
+                "class Usage {\n"
+                + "    Person person = PersonBuilder.build(PersonBuilder.builder().withName(\"a\"));\n"
+                + "}\n");
+
+        assertThat(result.errors, result.success, is(true));
+        assertThat(generated("PersonBuilder.java"), containsString("public final class PersonBuilder"));
     }
 
     @Test
@@ -824,12 +891,14 @@ public class LudicrousProcessorTest {
         }
 
         private static String className(String code) {
-            String pkg = code.substring("package ".length(), code.indexOf(';'));
             Matcher name = TYPE_NAME.matcher(code);
             if (!name.find()) {
                 throw new IllegalArgumentException("No type declared in " + code);
             }
-            return pkg + "." + name.group(1);
+            if (!code.startsWith("package ")) {
+                return name.group(1);
+            }
+            return code.substring("package ".length(), code.indexOf(';')) + "." + name.group(1);
         }
 
         @Override
