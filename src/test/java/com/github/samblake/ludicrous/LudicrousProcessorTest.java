@@ -15,7 +15,9 @@ import java.io.UncheckedIOException;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -561,6 +563,45 @@ public class LudicrousProcessorTest {
     }
 
     @Test
+    public void keepsTypeAnnotationsAtEveryLevel() {
+        Result result = compile(
+                "package test;\n"
+                + "@java.lang.annotation.Target(java.lang.annotation.ElementType.TYPE_USE)\n"
+                + "public @interface Nullable {}\n",
+                "package test;\n"
+                + "@com.github.samblake.ludicrous.Ludicrous\n"
+                + "public class Person {\n"
+                + "    public Person(java.util.List<@Nullable String> names, String @Nullable [] tags,\n"
+                + "            java.util.Map<String, ? extends @Nullable Number> scores) {}\n"
+                + "}\n");
+
+        assertThat(result.errors, result.success, is(true));
+        String builder = generated("test/PersonBuilder.java");
+        assertThat(builder, containsString("List<@Nullable String> names) {"));
+        assertThat(builder, containsString("withTags(String @Nullable [] tags) {"));
+        assertThat(builder, containsString("Map<String, ? extends @Nullable Number> scores) {"));
+        assertThat(builder, containsString("private final List<@Nullable String> names;"));
+    }
+
+    @Test
+    public void marksTheGeneratedClassesAsGenerated() {
+        Result result = compile(PERSON_WITH_PARENT);
+
+        assertThat(result.errors, result.success, is(true));
+        String generatedBy = "@Generated(\"com.github.samblake.ludicrous.LudicrousProcessor\")";
+        assertThat(generated("test/PersonBuilder.java"), containsString(generatedBy));
+        assertThat(generated("test/PersonBuilders.java"), containsString(generatedBy));
+    }
+
+    @Test
+    public void failsWhenCompilingForAReleaseBefore11() {
+        Result result = compile(Arrays.asList("--release", "8"), PERSON);
+
+        assertThat(result.success, is(false));
+        assertThat(result.errors, containsString("Ludicrous needs Java 11 or later, but this is compiling for RELEASE_8"));
+    }
+
+    @Test
     public void failsWhenTheGeneratedBaseIsNotExtended() {
         Result result = compile(
                 "package test;\n"
@@ -618,14 +659,18 @@ public class LudicrousProcessorTest {
     }
 
     private Result compile(String... sources) {
+        return compile(Collections.emptyList(), sources);
+    }
+
+    private Result compile(List<String> options, String... sources) {
         JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
         DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
         List<JavaFileObject> files = Arrays.stream(sources).map(Source::new).collect(Collectors.toList());
 
-        JavaCompiler.CompilationTask task = compiler.getTask(null, null, diagnostics,
-                Arrays.asList("-d", output.getRoot().getPath(), "-s", output.getRoot().getPath(),
-                        "-classpath", System.getProperty("java.class.path")),
-                null, files);
+        List<String> allOptions = new ArrayList<>(Arrays.asList("-d", output.getRoot().getPath(),
+                "-s", output.getRoot().getPath(), "-classpath", System.getProperty("java.class.path")));
+        allOptions.addAll(options);
+        JavaCompiler.CompilationTask task = compiler.getTask(null, null, diagnostics, allOptions, null, files);
         task.setProcessors(singletonList(new LudicrousProcessor()));
         boolean success = task.call();
 

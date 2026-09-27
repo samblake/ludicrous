@@ -1,20 +1,27 @@
 package com.github.samblake.ludicrous;
 
 import com.github.samblake.ludicrous.Blueprints.Plan;
+import com.squareup.javapoet.AnnotationSpec;
 import com.squareup.javapoet.ClassName;
 import com.squareup.javapoet.JavaFile;
 import com.squareup.javapoet.TypeSpec;
 
 import javax.annotation.processing.AbstractProcessor;
+import javax.annotation.processing.Generated;
 import javax.annotation.processing.ProcessingEnvironment;
 import javax.annotation.processing.RoundEnvironment;
 import javax.annotation.processing.SupportedAnnotationTypes;
 import javax.lang.model.SourceVersion;
 import javax.lang.model.element.Element;
+import javax.lang.model.element.ModuleElement;
+import javax.lang.model.element.ModuleElement.RequiresDirective;
 import javax.lang.model.element.TypeElement;
+import javax.lang.model.util.ElementFilter;
 import java.io.IOException;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 import static javax.tools.Diagnostic.Kind.ERROR;
@@ -52,6 +59,8 @@ public class LudicrousProcessor extends AbstractProcessor {
 
     private Blueprints blueprints;
 
+    private boolean reportedSourceVersion;
+
     @Override
     public synchronized void init(ProcessingEnvironment processingEnv) {
         super.init(processingEnv);
@@ -65,7 +74,20 @@ public class LudicrousProcessor extends AbstractProcessor {
 
     @Override
     public boolean process(Set<? extends TypeElement> annotations, RoundEnvironment roundEnv) {
-        for (Element element : roundEnv.getElementsAnnotatedWith(Ludicrous.class)) {
+        Set<? extends Element> elements = roundEnv.getElementsAnnotatedWith(Ludicrous.class);
+        if (elements.isEmpty()) {
+            return true;
+        }
+        // Earlier releases have no modules or @Generated, so the processor would fail somewhere less obvious
+        if (processingEnv.getSourceVersion().compareTo(SourceVersion.RELEASE_11) < 0) {
+            if (!reportedSourceVersion) {
+                processingEnv.getMessager().printMessage(ERROR, "Ludicrous needs Java 11 or later, but this is "
+                        + "compiling for " + processingEnv.getSourceVersion());
+                reportedSourceVersion = true;
+            }
+            return true;
+        }
+        for (Element element : elements) {
             Plan plan = blueprints.plan(element);
             plan.problems.forEach(problem -> error(element, problem));
             plan.blueprint
@@ -87,11 +109,48 @@ public class LudicrousProcessor extends AbstractProcessor {
     }
 
     private void generate(Blueprint blueprint) {
-        BuilderGenerator generator = new BuilderGenerator(blueprint);
+        BuilderGenerator generator = new BuilderGenerator(blueprint, generatedAnnotationFor(blueprint));
         write(blueprint, generator.builder());
         if (blueprint.settings.parent()) {
             write(blueprint, generator.parent());
         }
+    }
+
+    /**
+     * {@code @Generated}, if the generated code can use it, as a named module can only see it if it requires
+     * {@code java.compiler}.
+     */
+    private Optional<AnnotationSpec> generatedAnnotationFor(Blueprint blueprint) {
+        ModuleElement module = processingEnv.getElementUtils().getModuleOf(blueprint.owner);
+        if (!module.isUnnamed() && !reads(module, "java.compiler")) {
+            return Optional.empty();
+        }
+        return Optional.of(AnnotationSpec.builder(Generated.class)
+                .addMember("value", "$S", LudicrousProcessor.class.getName())
+                .build());
+    }
+
+    /**
+     * Whether the module reads the named one, by requiring it or a module that requires it transitively, as
+     * {@code java.se} does {@code java.compiler}.
+     */
+    private static boolean reads(ModuleElement module, String name) {
+        Set<ModuleElement> visited = new HashSet<>();
+        return ElementFilter.requiresIn(module.getDirectives()).stream()
+                .map(RequiresDirective::getDependency)
+                .anyMatch(dependency -> impliesReadabilityOf(dependency, name, visited));
+    }
+
+    private static boolean impliesReadabilityOf(ModuleElement module, String name, Set<ModuleElement> visited) {
+        if (module.getQualifiedName().contentEquals(name)) {
+            return true;
+        }
+        if (!visited.add(module)) {
+            return false;
+        }
+        return ElementFilter.requiresIn(module.getDirectives()).stream()
+                .filter(RequiresDirective::isTransitive)
+                .anyMatch(directive -> impliesReadabilityOf(directive.getDependency(), name, visited));
     }
 
     private void write(Blueprint blueprint, TypeSpec generated) {

@@ -145,7 +145,8 @@ its factory methods are both annotated.
 ### What carries over from the parameters
 
 * Annotations that can go on a parameter, such as validation annotations, are copied to the setter's parameter.
-* Type annotations, such as a type use `@Nullable`, are kept on the setter's parameter type.
+* Type annotations, such as a type use `@Nullable`, are kept at every level of the type, so
+  `List<@Nullable String>` stays as it is on the setter's parameter and the builder's field.
 * A varargs final parameter stays varargs, so `.withTags("new", "sale")` works.
 * Each `@param` description in the constructor or method's Javadoc becomes the setter's Javadoc, so it shows up
   in your IDE.
@@ -224,11 +225,13 @@ OrderView redirected = OrderView.from(view.toBuilder()
   `<Name>Builders`, both of which are ugly.
 * Compile errors are type mismatches between builder types with hard to read messages.
 * Passing a partially built builder around means writing out its full type, one type parameter per
-  constructor argument.
+  constructor argument. A local variable can use `var` instead, but fields, parameters and return types can't.
 * Every `with` call creates a new builder.
 * Every argument is always required.
 
 ## Adding it to a project
+
+Ludicrous needs Java 11 or later.
 
 ```xml
 <dependency>
@@ -245,3 +248,18 @@ If the project sets `annotationProcessorPaths` on `maven-compiler-plugin`, proce
 so add `ludicrous` to that list as well.
 
 In IntelliJ, annotation processing must be enabled for the generated classes to be found.
+
+### Modules
+
+In a modular project, require Ludicrous statically, as it's only needed while compiling, and put it on the
+processor module path along with javapoet:
+
+```java
+module shop {
+    requires static com.github.samblake.ludicrous;
+}
+```
+
+Generated classes are marked `@Generated`, so coverage tools and linters can skip them. The annotation is in the
+`java.compiler` module, so in a named module it's only added if the module reads `java.compiler`, by requiring it
+directly or through a module such as `java.se`.

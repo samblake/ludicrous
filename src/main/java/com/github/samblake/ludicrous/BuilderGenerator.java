@@ -1,6 +1,7 @@
 package com.github.samblake.ludicrous;
 
 import com.squareup.javapoet.AnnotationSpec;
+import com.squareup.javapoet.ArrayTypeName;
 import com.squareup.javapoet.ClassName;
 import com.squareup.javapoet.CodeBlock;
 import com.squareup.javapoet.MethodSpec;
@@ -8,15 +9,22 @@ import com.squareup.javapoet.ParameterSpec;
 import com.squareup.javapoet.ParameterizedTypeName;
 import com.squareup.javapoet.TypeName;
 import com.squareup.javapoet.TypeSpec;
+import com.squareup.javapoet.WildcardTypeName;
 
 import javax.lang.model.element.AnnotationMirror;
 import javax.lang.model.element.Modifier;
+import javax.lang.model.element.TypeElement;
+import javax.lang.model.type.ArrayType;
+import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.TypeKind;
+import javax.lang.model.type.TypeMirror;
+import javax.lang.model.type.WildcardType;
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Target;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Optional;
 import java.util.function.Function;
 
 import static java.util.stream.Collectors.toList;
@@ -38,10 +46,14 @@ final class BuilderGenerator {
     /** The {@code build} parameter, a builder with every argument present. */
     private final ParameterSpec complete;
 
-    BuilderGenerator(Blueprint blueprint) {
+    /** The {@code @Generated} annotation for the builder and parent, when the generated code can use it. */
+    private final Optional<AnnotationSpec> generated;
+
+    BuilderGenerator(Blueprint blueprint, Optional<AnnotationSpec> generated) {
         this.blueprint = blueprint;
         this.builder = blueprint.builder;
         this.arguments = blueprint.arguments;
+        this.generated = generated;
         this.complete = ParameterSpec.builder(builderOf(map(arguments, argument -> argument.present)), "builder")
                 .build();
     }
@@ -52,12 +64,13 @@ final class BuilderGenerator {
                 .addModifiers(visibility())
                 .addModifiers(FINAL)
                 .addTypeVariables(map(arguments, argument -> argument.state));
+        generated.ifPresent(builderType::addAnnotation);
 
         MethodSpec.Builder constructor = MethodSpec.constructorBuilder().addModifiers(PRIVATE);
         for (Argument argument : arguments) {
-            builderType.addField(TypeName.get(argument.type), argument.name, PRIVATE, FINAL);
+            builderType.addField(typeNameOf(argument.type), argument.name, PRIVATE, FINAL);
             constructor
-                    .addParameter(TypeName.get(argument.type), argument.name)
+                    .addParameter(typeNameOf(argument.type), argument.name)
                     .addStatement("this.$N = $N", argument.name, argument.name);
         }
         builderType.addMethod(constructor.build());
@@ -107,6 +120,7 @@ final class BuilderGenerator {
                         .addExceptions(map(blueprint.creator.getThrownTypes(), TypeName::get))
                         .addStatement("return $T.build($N)", builder, complete)
                         .build());
+        generated.ifPresent(parentType::addAnnotation);
 
         if (blueprint.settings.toBuilder()) {
             // The annotated class is required to extend this one, and the package private constructor keeps
@@ -184,21 +198,73 @@ final class BuilderGenerator {
 
     /**
      * The setter's parameter, keeping the original's declaration annotations that can go on a parameter, and its
-     * type annotations such as a type use {@code @Nullable}.
+     * type annotations such as a type use {@code @Nullable}, including those inside type arguments.
      */
     private static ParameterSpec setterParameterOf(Argument argument) {
-        // An annotation that targets both parameters and types is reported in both places, so only one is kept
+        // An annotation that targets both parameters and types is reported in both places at the top level of the
+        // type, so only the declaration one is kept
         List<AnnotationSpec> typeAnnotations = argument.type.getAnnotationMirrors().stream()
                 .filter(annotation -> !targets(annotation, ElementType.PARAMETER))
                 .map(AnnotationSpec::get)
                 .collect(toList());
-        ParameterSpec.Builder setterParameter =
-                ParameterSpec.builder(TypeName.get(argument.type).annotated(typeAnnotations), argument.name);
+        TypeName type = typeNameOf(argument.type).withoutAnnotations().annotated(typeAnnotations);
+        ParameterSpec.Builder setterParameter = ParameterSpec.builder(type, argument.name);
         argument.parameter.getAnnotationMirrors().stream()
                 .filter(annotation -> targets(annotation, ElementType.PARAMETER))
                 .map(AnnotationSpec::get)
                 .forEach(setterParameter::addAnnotation);
         return setterParameter.build();
+    }
+
+    /**
+     * The type with its type annotations at every level, such as the {@code @Nullable} in
+     * {@code List<@Nullable String>}, which {@link TypeName#get(TypeMirror)} drops.
+     */
+    private static TypeName typeNameOf(TypeMirror type) {
+        TypeName name;
+        switch (type.getKind()) {
+            case DECLARED:
+                name = declaredTypeNameOf((DeclaredType) type);
+                break;
+            case ARRAY:
+                name = ArrayTypeName.of(typeNameOf(((ArrayType) type).getComponentType()));
+                break;
+            case WILDCARD:
+                name = wildcardTypeNameOf((WildcardType) type);
+                break;
+            default:
+                name = TypeName.get(type);
+        }
+        List<AnnotationSpec> annotations = map(type.getAnnotationMirrors(), AnnotationSpec::get);
+        return annotations.isEmpty() ? name : name.annotated(annotations);
+    }
+
+    private static TypeName declaredTypeNameOf(DeclaredType type) {
+        TypeElement element = (TypeElement) type.asElement();
+        List<TypeName> typeArguments = map(type.getTypeArguments(), BuilderGenerator::typeNameOf);
+
+        // An inner class of a generic class, such as Outer<String>.Inner, is written with the outer type arguments
+        TypeMirror enclosing = type.getEnclosingType();
+        if (enclosing.getKind() == TypeKind.DECLARED && !element.getModifiers().contains(STATIC)) {
+            TypeName outer = typeNameOf(enclosing);
+            if (outer instanceof ParameterizedTypeName) {
+                return ((ParameterizedTypeName) outer).nestedClass(element.getSimpleName().toString(), typeArguments);
+            }
+        }
+        ClassName raw = ClassName.get(element);
+        return typeArguments.isEmpty()
+                ? raw
+                : ParameterizedTypeName.get(raw, typeArguments.toArray(new TypeName[0]));
+    }
+
+    private static TypeName wildcardTypeNameOf(WildcardType type) {
+        if (type.getExtendsBound() != null) {
+            return WildcardTypeName.subtypeOf(typeNameOf(type.getExtendsBound()));
+        }
+        if (type.getSuperBound() != null) {
+            return WildcardTypeName.supertypeOf(typeNameOf(type.getSuperBound()));
+        }
+        return WildcardTypeName.subtypeOf(Object.class);
     }
 
     private static boolean targets(AnnotationMirror annotation, ElementType elementType) {
