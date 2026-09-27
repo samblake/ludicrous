@@ -689,6 +689,21 @@ public class LudicrousProcessorTest {
     }
 
     @Test
+    public void buildsAClassInTheDefaultPackage() {
+        Result result = compile(
+                "@com.github.samblake.ludicrous.Ludicrous\n"
+                + "public class Person {\n"
+                + "    public Person(String name) {}\n"
+                + "}\n",
+                "class Usage {\n"
+                + "    Person person = PersonBuilder.build(PersonBuilder.builder().withName(\"a\"));\n"
+                + "}\n");
+
+        assertThat(result.errors, result.success, is(true));
+        assertThat(generated("PersonBuilder.java"), containsString("public final class PersonBuilder"));
+    }
+
+    @Test
     public void failsWithAParentOnARecord() {
         Result result = compile(
                 "package test;\n"
@@ -824,12 +839,14 @@ public class LudicrousProcessorTest {
         }
 
         private static String className(String code) {
-            String pkg = code.substring("package ".length(), code.indexOf(';'));
             Matcher name = TYPE_NAME.matcher(code);
             if (!name.find()) {
                 throw new IllegalArgumentException("No type declared in " + code);
             }
-            return pkg + "." + name.group(1);
+            if (!code.startsWith("package ")) {
+                return name.group(1);
+            }
+            return code.substring("package ".length(), code.indexOf(';')) + "." + name.group(1);
         }
 
         @Override
