@@ -10,17 +10,17 @@
     <description>Annotation processor that generates builders whose type tracks which arguments have been set</description>
 
     <properties>
-        <java.version>11</java.version>
+        <java.version>17</java.version>
         <maven.compiler.release>${java.version}</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <javapoet.version>1.13.0</javapoet.version>
+        <javapoet.version>0.20.0</javapoet.version>
         <junit.version>4.13.2</junit.version>
         <hamcrest.version>2.0.0.0</hamcrest.version>
     </properties>
 
     <dependencies>
         <dependency>
-            <groupId>com.squareup</groupId>
+            <groupId>com.palantir.javapoet</groupId>
             <artifactId>javapoet</artifactId>
             <version>${javapoet.version}</version>
         </dependency>

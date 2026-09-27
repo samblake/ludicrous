@@ -1,15 +1,15 @@
 package com.github.samblake.ludicrous;
 
-import com.squareup.javapoet.AnnotationSpec;
-import com.squareup.javapoet.ArrayTypeName;
-import com.squareup.javapoet.ClassName;
-import com.squareup.javapoet.CodeBlock;
-import com.squareup.javapoet.MethodSpec;
-import com.squareup.javapoet.ParameterSpec;
-import com.squareup.javapoet.ParameterizedTypeName;
-import com.squareup.javapoet.TypeName;
-import com.squareup.javapoet.TypeSpec;
-import com.squareup.javapoet.WildcardTypeName;
+import com.palantir.javapoet.AnnotationSpec;
+import com.palantir.javapoet.ArrayTypeName;
+import com.palantir.javapoet.ClassName;
+import com.palantir.javapoet.CodeBlock;
+import com.palantir.javapoet.MethodSpec;
+import com.palantir.javapoet.ParameterSpec;
+import com.palantir.javapoet.ParameterizedTypeName;
+import com.palantir.javapoet.TypeName;
+import com.palantir.javapoet.TypeSpec;
+import com.palantir.javapoet.WildcardTypeName;
 
 import javax.lang.model.element.AnnotationMirror;
 import javax.lang.model.element.Modifier;
@@ -32,6 +32,7 @@ import static javax.lang.model.element.Modifier.ABSTRACT;
 import static javax.lang.model.element.Modifier.FINAL;
 import static javax.lang.model.element.Modifier.PRIVATE;
 import static javax.lang.model.element.Modifier.PUBLIC;
+import static javax.lang.model.element.Modifier.SEALED;
 import static javax.lang.model.element.Modifier.STATIC;
 
 /**
@@ -110,9 +111,8 @@ final class BuilderGenerator {
         TypeSpec.Builder parentType = TypeSpec.classBuilder(product.peerClass(product.simpleName() + "Builders"))
                 .addOriginatingElement(blueprint.owner)
                 .addModifiers(visibility())
-                .addModifiers(ABSTRACT)
-                // Package private so only classes alongside the annotated one can extend it
-                .addMethod(MethodSpec.constructorBuilder().build())
+                .addModifiers(ABSTRACT, SEALED)
+                .addPermittedSubclass(product)
                 .addMethod(MethodSpec.methodBuilder("from")
                         .addModifiers(PUBLIC, STATIC)
                         .returns(product)
@@ -123,11 +123,10 @@ final class BuilderGenerator {
         generated.ifPresent(parentType::addAnnotation);
 
         if (blueprint.settings.toBuilder()) {
-            // The annotated class is required to extend this one, and the package private constructor keeps
-            // other subclasses to its own package
+            // Safe, as this class is sealed with the annotated class as its only permitted subclass
             parentType.addMethod(MethodSpec.methodBuilder("toBuilder")
                     .addModifiers(PUBLIC)
-                    .returns(complete.type)
+                    .returns(complete.type())
                     .addStatement("return $T.from(($T) this)", builder, product)
                     .build());
         }
@@ -158,7 +157,7 @@ final class BuilderGenerator {
         ParameterSpec source = ParameterSpec.builder(ClassName.get(blueprint.product), "source").build();
         return MethodSpec.methodBuilder("from")
                 .addModifiers(PUBLIC, STATIC)
-                .returns(complete.type)
+                .returns(complete.type())
                 .addParameter(source)
                 .addStatement("return new $T<>($L)", builder,
                         join(map(arguments, argument -> CodeBlock.of("$N.$L", source, argument.reader.get()))))

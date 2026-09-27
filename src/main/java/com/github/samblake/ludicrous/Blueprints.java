@@ -1,13 +1,15 @@
 package com.github.samblake.ludicrous;
 
-import com.squareup.javapoet.ClassName;
+import com.palantir.javapoet.ClassName;
 
 import javax.annotation.processing.ProcessingEnvironment;
 import javax.lang.model.SourceVersion;
 import javax.lang.model.element.Element;
+import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.Modifier;
 import javax.lang.model.element.NestingKind;
+import javax.lang.model.element.RecordComponentElement;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.element.VariableElement;
 import javax.lang.model.type.DeclaredType;
@@ -33,8 +35,11 @@ import static java.util.regex.Pattern.DOTALL;
 import static java.util.regex.Pattern.MULTILINE;
 import static java.util.stream.Collectors.toList;
 import static javax.lang.model.element.Modifier.ABSTRACT;
+import static javax.lang.model.element.Modifier.FINAL;
+import static javax.lang.model.element.Modifier.NON_SEALED;
 import static javax.lang.model.element.Modifier.PRIVATE;
 import static javax.lang.model.element.Modifier.PUBLIC;
+import static javax.lang.model.element.Modifier.SEALED;
 import static javax.lang.model.element.Modifier.STATIC;
 import static javax.lang.model.util.ElementFilter.constructorsIn;
 
@@ -43,6 +48,9 @@ import static javax.lang.model.util.ElementFilter.constructorsIn;
  * can't be generated from it.
  */
 final class Blueprints {
+
+    private static final String PARENT_ON_RECORD =
+            "@Ludicrous(parent = true) cannot be used on a record, as a record can't extend a class";
 
     private static final List<String> BUILDER_METHODS = Arrays.asList("builder", "build", "from");
 
@@ -91,12 +99,14 @@ final class Blueprints {
         switch (element.getKind()) {
             case CLASS:
                 return planClass((TypeElement) element);
+            case RECORD:
+                return planRecord((TypeElement) element);
             case CONSTRUCTOR:
                 return planConstructor((ExecutableElement) element);
             case METHOD:
                 return planMethod((ExecutableElement) element);
             default:
-                return Plan.failed("@Ludicrous can only be used on a class, a constructor or a static method");
+                return Plan.failed("@Ludicrous can only be used on a class, a record, a constructor or a static method");
         }
     }
 
@@ -119,6 +129,41 @@ final class Blueprints {
         return plan(type, constructors.get(0), type);
     }
 
+    private Plan planRecord(TypeElement record) {
+        // The annotated constructor reports this, so reporting it here too would only repeat it
+        if (constructorsIn(record.getEnclosedElements()).stream().anyMatch(Blueprints::isAnnotated)) {
+            return Plan.skipped();
+        }
+        Optional<String> problem = problemWith(record);
+        if (problem.isPresent()) {
+            return Plan.failed(problem.get());
+        }
+        if (record.getAnnotation(Ludicrous.class).parent()) {
+            return Plan.failed(PARENT_ON_RECORD);
+        }
+        return plan(record, canonicalConstructorOf(record), record);
+    }
+
+    /**
+     * The record's canonical constructor, the one taking each component in order, which every record has.
+     */
+    private ExecutableElement canonicalConstructorOf(TypeElement record) {
+        List<? extends RecordComponentElement> components = record.getRecordComponents();
+        return constructorsIn(record.getEnclosedElements()).stream()
+                .filter(constructor -> constructor.getParameters().size() == components.size())
+                .filter(constructor -> {
+                    for (int i = 0; i < components.size(); i++) {
+                        if (!types.isSameType(constructor.getParameters().get(i).asType(),
+                                components.get(i).asType())) {
+                            return false;
+                        }
+                    }
+                    return true;
+                })
+                .findFirst()
+                .orElseThrow();
+    }
+
     private Plan planConstructor(ExecutableElement constructor) {
         TypeElement type = (TypeElement) constructor.getEnclosingElement();
         if (isAnnotated(type)) {
@@ -131,6 +176,9 @@ final class Blueprints {
         Optional<String> problem = problemWith(type);
         if (problem.isPresent()) {
             return Plan.failed(problem.get());
+        }
+        if (constructor.getAnnotation(Ludicrous.class).parent() && type.getKind() == ElementKind.RECORD) {
+            return Plan.failed(PARENT_ON_RECORD);
         }
         if (constructor.getAnnotation(Ludicrous.class).parent()) {
             long parents = constructorsIn(type.getEnclosedElements()).stream()
@@ -251,6 +299,11 @@ final class Blueprints {
             if (!superclass.equals(baseName) && !superclass.equals(packageOf(blueprint.product) + "." + baseName)) {
                 problems.add(blueprint.product.getSimpleName() + " must extend the generated " + baseName);
             }
+            Set<Modifier> modifiers = blueprint.product.getModifiers();
+            if (!modifiers.contains(FINAL) && !modifiers.contains(SEALED) && !modifiers.contains(NON_SEALED)) {
+                problems.add(blueprint.product.getSimpleName() + " must be final, sealed or non-sealed, as it extends "
+                        + "the generated " + baseName + ", which is sealed");
+            }
         }
 
         if (settings.toBuilder()) {
@@ -350,6 +403,12 @@ final class Blueprints {
      */
     private Map<String, String> parameterDocsOf(ExecutableElement creator) {
         String doc = elements.getDocComment(creator);
+        // A record's canonical constructor is usually implicit, with its components documented on the record
+        Element owner = creator.getEnclosingElement();
+        if (doc == null && owner.getKind() == ElementKind.RECORD
+                && creator.equals(canonicalConstructorOf((TypeElement) owner))) {
+            doc = elements.getDocComment(owner);
+        }
         if (doc == null) {
             return Collections.emptyMap();
         }

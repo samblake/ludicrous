@@ -1,6 +1,6 @@
 module com.github.samblake.ludicrous {
     requires java.compiler;
-    requires com.squareup.javapoet;
+    requires com.palantir.javapoet;
 
     exports com.github.samblake.ludicrous;
 

@@ -1,10 +1,10 @@
 package com.github.samblake.ludicrous;
 
 import com.github.samblake.ludicrous.Blueprints.Plan;
-import com.squareup.javapoet.AnnotationSpec;
-import com.squareup.javapoet.ClassName;
-import com.squareup.javapoet.JavaFile;
-import com.squareup.javapoet.TypeSpec;
+import com.palantir.javapoet.AnnotationSpec;
+import com.palantir.javapoet.ClassName;
+import com.palantir.javapoet.JavaFile;
+import com.palantir.javapoet.TypeSpec;
 
 import javax.annotation.processing.AbstractProcessor;
 import javax.annotation.processing.Generated;
@@ -78,10 +78,10 @@ public class LudicrousProcessor extends AbstractProcessor {
         if (elements.isEmpty()) {
             return true;
         }
-        // Earlier releases have no modules or @Generated, so the processor would fail somewhere less obvious
-        if (processingEnv.getSourceVersion().compareTo(SourceVersion.RELEASE_11) < 0) {
+        // Earlier releases have no records or sealed classes, so the generated code would fail somewhere less obvious
+        if (processingEnv.getSourceVersion().compareTo(SourceVersion.RELEASE_17) < 0) {
             if (!reportedSourceVersion) {
-                processingEnv.getMessager().printMessage(ERROR, "Ludicrous needs Java 11 or later, but this is "
+                processingEnv.getMessager().printMessage(ERROR, "Ludicrous needs Java 17 or later, but this is "
                         + "compiling for " + processingEnv.getSourceVersion());
                 reportedSourceVersion = true;
             }
@@ -162,7 +162,7 @@ public class LudicrousProcessor extends AbstractProcessor {
                     .writeTo(processingEnv.getFiler());
         }
         catch (IOException e) {
-            error(blueprint.annotated, "Could not write " + generated.name + ": " + e.getMessage());
+            error(blueprint.annotated, "Could not write " + generated.name() + ": " + e.getMessage());
         }
     }
 

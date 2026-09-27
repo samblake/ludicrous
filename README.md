@@ -43,14 +43,30 @@ The annotated class must be a top level, non generic, non abstract class with ex
 If it has several constructors, annotate the one to use instead (see below). If it hides its constructor, annotate
 a static factory method.
 
+### Records
+
+`@Ludicrous` works on a record too, using its canonical constructor, so any extra constructors don't get in the
+way:
+
+```java
+@Ludicrous
+public record OrderView(List<Product> products, Address address, Money total) {}
+```
+
+Every record component has an accessor named after it, so `toBuilder = true` works on a record without adding
+anything. A record can't extend a class, so `parent = true` isn't supported on one.
+
 ### Building from the class itself
 
 Set `parent = true` to also generate `<Name>Builders`, which the class must extend. This adds a static `from`,
-so the class can be built with `OrderView.from(...)` instead of `OrderViewBuilder.build(...)`:
+so the class can be built with `OrderView.from(...)` instead of `OrderViewBuilder.build(...)`.
+
+`<Name>Builders` is sealed, with the annotated class as its only permitted subclass. Java requires a class extending
+a sealed class to be `final`, `sealed` or `non-sealed`, so the annotated class must be one of those:
 
 ```java
 @Ludicrous(parent = true)
-public class OrderView extends OrderViewBuilders {
+public final class OrderView extends OrderViewBuilders {
     ...
 }
 
@@ -149,7 +165,8 @@ its factory methods are both annotated.
   `List<@Nullable String>` stays as it is on the setter's parameter and the builder's field.
 * A varargs final parameter stays varargs, so `.withTags("new", "sale")` works.
 * Each `@param` description in the constructor or method's Javadoc becomes the setter's Javadoc, so it shows up
-  in your IDE.
+  in your IDE. For a record, the `@param` tags on the record itself are used, unless you've written a canonical
+  constructor with its own Javadoc.
 
 ## Bonus: `toBuilder`
 
@@ -199,7 +216,7 @@ With `parent = true` as well, the class also gets an instance method, which read
 
 ```java
 @Ludicrous(parent = true, toBuilder = true)
-public class OrderView extends OrderViewBuilders {
+public final class OrderView extends OrderViewBuilders {
     ...
 }
 
@@ -231,7 +248,7 @@ OrderView redirected = OrderView.from(view.toBuilder()
 
 ## Adding it to a project
 
-Ludicrous needs Java 11 or later.
+Ludicrous needs Java 17 or later.
 
 ```xml
 <dependency>
@@ -252,7 +269,7 @@ In IntelliJ, annotation processing must be enabled for the generated classes to 
 ### Modules
 
 In a modular project, require Ludicrous statically, as it's only needed while compiling, and put it on the
-processor module path along with javapoet:
+processor module path along with Palantir's javapoet, `com.palantir.javapoet:javapoet`:
 
 ```java
 module shop {
