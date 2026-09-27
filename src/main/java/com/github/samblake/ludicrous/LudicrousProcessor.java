@@ -67,7 +67,10 @@ public class LudicrousProcessor extends AbstractProcessor {
     public boolean process(Set<? extends TypeElement> annotations, RoundEnvironment roundEnv) {
         for (Element element : roundEnv.getElementsAnnotatedWith(Ludicrous.class)) {
             Plan plan = blueprints.plan(element);
-            plan.problems.forEach(problem -> error(element, problem));
+            // Reported as one error, as JDK 8 only shows the first error at each position
+            if (!plan.problems.isEmpty()) {
+                error(element, String.join("\n", plan.problems));
+            }
             plan.blueprint
                     .filter(blueprint -> plan.problems.isEmpty())
                     .filter(this::isUniquelyNamed)
