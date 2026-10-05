@@ -1,7 +1,7 @@
 package com.github.samblake.ludicrous;
 
-import com.squareup.javapoet.ClassName;
-import com.squareup.javapoet.TypeVariableName;
+import com.palantir.javapoet.ClassName;
+import com.palantir.javapoet.TypeVariableName;
 
 import javax.lang.model.element.VariableElement;
 import javax.lang.model.type.TypeMirror;

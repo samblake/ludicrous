@@ -1,21 +1,34 @@
 package com.github.samblake.ludicrous;
 
 import com.github.samblake.ludicrous.Blueprints.Plan;
-import com.squareup.javapoet.ClassName;
-import com.squareup.javapoet.JavaFile;
-import com.squareup.javapoet.TypeSpec;
+import com.palantir.javapoet.AnnotationSpec;
+import com.palantir.javapoet.ClassName;
+import com.palantir.javapoet.JavaFile;
+import com.palantir.javapoet.TypeSpec;
 
 import javax.annotation.processing.AbstractProcessor;
+import javax.annotation.processing.Generated;
 import javax.annotation.processing.ProcessingEnvironment;
 import javax.annotation.processing.RoundEnvironment;
 import javax.annotation.processing.SupportedAnnotationTypes;
 import javax.lang.model.SourceVersion;
 import javax.lang.model.element.Element;
+import javax.lang.model.element.ModuleElement;
+import javax.lang.model.element.ModuleElement.RequiresDirective;
 import javax.lang.model.element.TypeElement;
+import javax.lang.model.util.ElementFilter;
+import javax.tools.JavaFileObject;
 import java.io.IOException;
+import java.io.Writer;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import static java.util.stream.Collectors.joining;
 
 import static javax.tools.Diagnostic.Kind.ERROR;
 
@@ -52,6 +65,12 @@ public class LudicrousProcessor extends AbstractProcessor {
 
     private Blueprints blueprints;
 
+    private boolean reportedSourceVersion;
+
+    /** A comment as javapoet writes it, with its indent, and the lines between its opening and closing lines. */
+    private static final Pattern TRADITIONAL_COMMENT =
+            Pattern.compile("^([ \\t]*)/\\*\\*\\n((?:\\1 \\*.*\\n)*?)\\1 \\*/\\n", Pattern.MULTILINE);
+
     @Override
     public synchronized void init(ProcessingEnvironment processingEnv) {
         super.init(processingEnv);
@@ -65,7 +84,21 @@ public class LudicrousProcessor extends AbstractProcessor {
 
     @Override
     public boolean process(Set<? extends TypeElement> annotations, RoundEnvironment roundEnv) {
-        for (Element element : roundEnv.getElementsAnnotatedWith(Ludicrous.class)) {
+        Set<? extends Element> elements = roundEnv.getElementsAnnotatedWith(Ludicrous.class);
+        if (elements.isEmpty()) {
+            return true;
+        }
+        // Java 25 is this version's minimum. Below 17 the generated sealed parent class wouldn't compile either, which
+        // would be a less obvious failure, so it's reported clearly here
+        if (processingEnv.getSourceVersion().compareTo(SourceVersion.RELEASE_25) < 0) {
+            if (!reportedSourceVersion) {
+                processingEnv.getMessager().printMessage(ERROR, "Ludicrous needs Java 25 or later, but this is "
+                        + "compiling for " + processingEnv.getSourceVersion());
+                reportedSourceVersion = true;
+            }
+            return true;
+        }
+        for (Element element : elements) {
             Plan plan = blueprints.plan(element);
             // Reported as one error, as JDK 8 only shows the first error at each position
             if (!plan.problems.isEmpty()) {
@@ -90,24 +123,85 @@ public class LudicrousProcessor extends AbstractProcessor {
     }
 
     private void generate(Blueprint blueprint) {
-        BuilderGenerator generator = new BuilderGenerator(blueprint);
+        BuilderGenerator generator = new BuilderGenerator(blueprint, generatedAnnotationFor(blueprint));
         write(blueprint, generator.builder());
         if (blueprint.settings.parent()) {
             write(blueprint, generator.parent());
         }
     }
 
+    /**
+     * {@code @Generated}, if the generated code can use it, as a named module can only see it if it requires
+     * {@code java.compiler}.
+     */
+    private Optional<AnnotationSpec> generatedAnnotationFor(Blueprint blueprint) {
+        ModuleElement module = processingEnv.getElementUtils().getModuleOf(blueprint.owner);
+        if (!module.isUnnamed() && !reads(module, "java.compiler")) {
+            return Optional.empty();
+        }
+        return Optional.of(AnnotationSpec.builder(Generated.class)
+                .addMember("value", "$S", LudicrousProcessor.class.getName())
+                .build());
+    }
+
+    /**
+     * Whether the module reads the named one, by requiring it or a module that requires it transitively, as
+     * {@code java.se} does {@code java.compiler}.
+     */
+    private static boolean reads(ModuleElement module, String name) {
+        Set<ModuleElement> visited = new HashSet<>();
+        return ElementFilter.requiresIn(module.getDirectives()).stream()
+                .map(RequiresDirective::getDependency)
+                .anyMatch(dependency -> impliesReadabilityOf(dependency, name, visited));
+    }
+
+    private static boolean impliesReadabilityOf(ModuleElement module, String name, Set<ModuleElement> visited) {
+        if (module.getQualifiedName().contentEquals(name)) {
+            return true;
+        }
+        if (!visited.add(module)) {
+            return false;
+        }
+        return ElementFilter.requiresIn(module.getDirectives()).stream()
+                .filter(RequiresDirective::isTransitive)
+                .anyMatch(directive -> impliesReadabilityOf(directive.getDependency(), name, visited));
+    }
+
     private void write(Blueprint blueprint, TypeSpec generated) {
+        JavaFile file = JavaFile.builder(blueprint.builder.packageName(), generated)
+                .skipJavaLangImports(true)
+                .indent("    ")
+                .build();
+        String source = blueprint.markdownDocs ? toMarkdownComments(file.toString()) : file.toString();
         try {
-            JavaFile.builder(blueprint.builder.packageName(), generated)
-                    .skipJavaLangImports(true)
-                    .indent("    ")
-                    .build()
-                    .writeTo(processingEnv.getFiler());
+            String name = file.packageName().isEmpty() ? generated.name() : file.packageName() + "." + generated.name();
+            JavaFileObject output = processingEnv.getFiler().createSourceFile(name, blueprint.owner);
+            try (Writer writer = output.openWriter()) {
+                writer.write(source);
+            }
         }
         catch (IOException e) {
-            error(blueprint.annotated, "Could not write " + generated.name + ": " + e.getMessage());
+            error(blueprint.annotated, "Could not write " + generated.name() + ": " + e.getMessage());
         }
+    }
+
+    /**
+     * Rewrites each {@code /** *}{@code /} comment javapoet generates as a Markdown {@code ///} one, which it can't
+     * generate itself.
+     */
+    private static String toMarkdownComments(String source) {
+        Matcher comment = TRADITIONAL_COMMENT.matcher(source);
+        StringBuilder markdown = new StringBuilder();
+        while (comment.find()) {
+            String indent = comment.group(1);
+            String lines = comment.group(2).lines()
+                    .map(line -> line.substring(indent.length() + " *".length()).stripTrailing())
+                    .map(text -> indent + "///" + text + "\n")
+                    .collect(joining());
+            comment.appendReplacement(markdown, Matcher.quoteReplacement(lines));
+        }
+        comment.appendTail(markdown);
+        return markdown.toString();
     }
 
     private void error(Element element, String message) {

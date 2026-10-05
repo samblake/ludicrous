@@ -15,7 +15,9 @@ import java.io.UncheckedIOException;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -39,7 +41,7 @@ public class LudicrousProcessorTest {
     private static final String PERSON_WITH_PARENT =
             "package test;\n"
             + "@com.github.samblake.ludicrous.Ludicrous(parent = true)\n"
-            + "public class Person extends PersonBuilders {\n"
+            + "public final class Person extends PersonBuilders {\n"
             + "    public Person(String name) {}\n"
             + "}\n";
 
@@ -111,7 +113,7 @@ public class LudicrousProcessorTest {
         Result result = compile(
                 "package test;\n"
                 + "@com.github.samblake.ludicrous.Ludicrous(parent = true, toBuilder = true)\n"
-                + "public class Person extends PersonBuilders {\n"
+                + "public final class Person extends PersonBuilders {\n"
                 + "    private final String name;\n"
                 + "    public Person(String name) { this.name = name; }\n"
                 + "    public String getName() { return name; }\n"
@@ -255,13 +257,13 @@ public class LudicrousProcessorTest {
     }
 
     @Test
-    public void onlyAllowsTheParentToBeExtendedInTheSamePackage() {
+    public void onlyAllowsTheAnnotatedClassToExtendTheParent() {
         Result result = compile(PERSON_WITH_PARENT,
-                "package other;\n"
-                + "public class Impostor extends test.PersonBuilders {}\n");
+                "package test;\n"
+                + "final class Impostor extends PersonBuilders {}\n");
 
         assertThat(result.success, is(false));
-        assertThat(result.errors, containsString("PersonBuilders() is not public in test.PersonBuilders"));
+        assertThat(result.errors, containsString("class is not allowed to extend sealed class: test.PersonBuilders"));
     }
 
     @Test
@@ -348,7 +350,7 @@ public class LudicrousProcessorTest {
     public void failsWhenTwoConstructorsWantTheParent() {
         Result result = compile(
                 "package test;\n"
-                + "public class Person extends PersonBuilders {\n"
+                + "public final class Person extends PersonBuilders {\n"
                 + "    @com.github.samblake.ludicrous.Ludicrous(parent = true)\n"
                 + "    public Person(String name) {}\n"
                 + "    @com.github.samblake.ludicrous.Ludicrous(parent = true, name = \"AgedPersonBuilder\")\n"
@@ -363,7 +365,7 @@ public class LudicrousProcessorTest {
     public void usesTheParentFromAnAnnotatedConstructor() {
         Result result = compile(
                 "package test;\n"
-                + "public class Person extends PersonBuilders {\n"
+                + "public final class Person extends PersonBuilders {\n"
                 + "    public Person() {}\n"
                 + "    @com.github.samblake.ludicrous.Ludicrous(parent = true)\n"
                 + "    public Person(String name) {}\n"
@@ -561,6 +563,184 @@ public class LudicrousProcessorTest {
     }
 
     @Test
+    public void keepsTypeAnnotationsAtEveryLevel() {
+        Result result = compile(
+                "package test;\n"
+                + "@java.lang.annotation.Target(java.lang.annotation.ElementType.TYPE_USE)\n"
+                + "public @interface Nullable {}\n",
+                "package test;\n"
+                + "@com.github.samblake.ludicrous.Ludicrous\n"
+                + "public class Person {\n"
+                + "    public Person(java.util.List<@Nullable String> names, String @Nullable [] tags,\n"
+                + "            java.util.Map<String, ? extends @Nullable Number> scores) {}\n"
+                + "}\n");
+
+        assertThat(result.errors, result.success, is(true));
+        String builder = generated("test/PersonBuilder.java");
+        assertThat(builder, containsString("List<@Nullable String> names) {"));
+        assertThat(builder, containsString("withTags(String @Nullable [] tags) {"));
+        assertThat(builder, containsString("Map<String, ? extends @Nullable Number> scores) {"));
+        assertThat(builder, containsString("private final List<@Nullable String> names;"));
+    }
+
+    @Test
+    public void marksTheGeneratedClassesAsGenerated() {
+        Result result = compile(PERSON_WITH_PARENT);
+
+        assertThat(result.errors, result.success, is(true));
+        String generatedBy = "@Generated(\"com.github.samblake.ludicrous.LudicrousProcessor\")";
+        assertThat(generated("test/PersonBuilder.java"), containsString(generatedBy));
+        assertThat(generated("test/PersonBuilders.java"), containsString(generatedBy));
+    }
+
+    @Test
+    public void failsWhenCompilingForAReleaseBefore11() {
+        Result result = compile(Arrays.asList("--release", "8"), PERSON);
+
+        assertThat(result.success, is(false));
+        assertThat(result.errors, containsString("Ludicrous needs Java 25 or later, but this is compiling for RELEASE_8"));
+    }
+
+    @Test
+    public void buildsARecordThroughItsCanonicalConstructor() {
+        Result result = compile(
+                "package test;\n"
+                + "@com.github.samblake.ludicrous.Ludicrous\n"
+                + "public record Person(String name, int age) {\n"
+                + "    public Person(String name) { this(name, 0); }\n"
+                + "}\n",
+                "package test;\n"
+                + "class Usage {\n"
+                + "    Person person = PersonBuilder.build(PersonBuilder.builder().withAge(3).withName(\"a\"));\n"
+                + "}\n");
+
+        assertThat(result.errors, result.success, is(true));
+    }
+
+    @Test
+    public void startsABuilderFromARecordThroughItsAccessors() {
+        Result result = compile(
+                "package test;\n"
+                + "@com.github.samblake.ludicrous.Ludicrous(toBuilder = true)\n"
+                + "public record Person(String name, int age) {}\n",
+                "package test;\n"
+                + "class Usage {\n"
+                + "    Person older(Person person) { return PersonBuilder.build(PersonBuilder.from(person).withAge(4)); }\n"
+                + "}\n");
+
+        assertThat(result.errors, result.success, is(true));
+        assertThat(generated("test/PersonBuilder.java"), containsString("source.name(), source.age()"));
+    }
+
+    @Test
+    public void buildsARecordThroughAnAnnotatedConstructor() {
+        Result result = compile(
+                "package test;\n"
+                + "public record Person(String name, int age) {\n"
+                + "    @com.github.samblake.ludicrous.Ludicrous\n"
+                + "    public Person(String name) { this(name, 0); }\n"
+                + "}\n",
+                "package test;\n"
+                + "class Usage {\n"
+                + "    Person person = PersonBuilder.build(PersonBuilder.builder().withName(\"a\"));\n"
+                + "}\n");
+
+        assertThat(result.errors, result.success, is(true));
+    }
+
+    @Test
+    public void readsParamDocsFromTheRecord() {
+        Result result = compile(
+                "package test;\n"
+                + "/**\n"
+                + " * A person.\n"
+                + " *\n"
+                + " * @param name the person's name\n"
+                + " * @param age in years\n"
+                + " */\n"
+                + "@com.github.samblake.ludicrous.Ludicrous\n"
+                + "public record Person(String name, int age) {}\n");
+
+        assertThat(result.errors, result.success, is(true));
+        String builder = generated("test/PersonBuilder.java");
+        assertThat(builder, containsString("@param name the person's name"));
+        assertThat(builder, containsString("@param age in years"));
+    }
+
+    @Test
+    public void prefersParamDocsOnAWrittenCanonicalConstructor() {
+        Result result = compile(
+                "package test;\n"
+                + "/**\n"
+                + " * @param name from the record\n"
+                + " */\n"
+                + "@com.github.samblake.ludicrous.Ludicrous\n"
+                + "public record Person(String name) {\n"
+                + "    /**\n"
+                + "     * @param name from the constructor\n"
+                + "     */\n"
+                + "    public Person(String name) { this.name = name; }\n"
+                + "}\n");
+
+        assertThat(result.errors, result.success, is(true));
+        String builder = generated("test/PersonBuilder.java");
+        assertThat(builder, containsString("@param name from the constructor"));
+        assertThat(builder, not(containsString("from the record")));
+    }
+
+    @Test
+    public void keepsMarkdownParamDocsAsMarkdown() {
+        Result result = compile(
+                "package test;\n"
+                + "@com.github.samblake.ludicrous.Ludicrous\n"
+                + "public class Person {\n"
+                + "    /// A person.\n"
+                + "    ///\n"
+                + "    /// @param name the person's **name**, see [String]\n"
+                + "    ///   as written\n"
+                + "    /// @param age\n"
+                + "    public Person(String name, int age) {}\n"
+                + "}\n");
+
+        assertThat(result.errors, result.success, is(true));
+        String builder = generated("test/PersonBuilder.java");
+        assertThat(builder, containsString("    /// Sets `name`.\n    ///\n"
+                + "    /// @param name the person's **name**, see [String] as written\n"));
+        assertThat(builder, not(containsString("/**")));
+        assertThat(builder, not(containsString("@param age")));
+    }
+
+    @Test
+    public void readsMarkdownParamDocsFromARecord() {
+        Result result = compile(
+                "package test;\n"
+                + "/// @param name the person's name\n"
+                + "@com.github.samblake.ludicrous.Ludicrous\n"
+                + "public record Person(String name) {}\n");
+
+        assertThat(result.errors, result.success, is(true));
+        assertThat(generated("test/PersonBuilder.java"), containsString("/// @param name the person's name"));
+    }
+
+    @Test
+    public void keepsTraditionalParamDocsTraditional() {
+        Result result = compile(
+                "package test;\n"
+                + "@com.github.samblake.ludicrous.Ludicrous\n"
+                + "public class Person {\n"
+                + "    /**\n"
+                + "     * @param name the person's name\n"
+                + "     */\n"
+                + "    public Person(String name) {}\n"
+                + "}\n");
+
+        assertThat(result.errors, result.success, is(true));
+        String builder = generated("test/PersonBuilder.java");
+        assertThat(builder, containsString("     * Sets {@code name}."));
+        assertThat(builder, not(containsString("///")));
+    }
+
+    @Test
     public void buildsAClassInTheDefaultPackage() {
         Result result = compile(
                 "@com.github.samblake.ludicrous.Ludicrous\n"
@@ -573,6 +753,40 @@ public class LudicrousProcessorTest {
 
         assertThat(result.errors, result.success, is(true));
         assertThat(generated("PersonBuilder.java"), containsString("public final class PersonBuilder"));
+    }
+
+    @Test
+    public void failsWithAParentOnARecord() {
+        Result result = compile(
+                "package test;\n"
+                + "@com.github.samblake.ludicrous.Ludicrous(parent = true)\n"
+                + "public record Person(String name) {}\n");
+
+        assertThat(result.success, is(false));
+        assertThat(result.errors, containsString("cannot be used on a record, as a record can't extend a class"));
+    }
+
+    @Test
+    public void sealsTheParent() {
+        Result result = compile(PERSON_WITH_PARENT);
+
+        assertThat(result.errors, result.success, is(true));
+        assertThat(generated("test/PersonBuilders.java"),
+                containsString("public abstract sealed class PersonBuilders permits Person"));
+    }
+
+    @Test
+    public void failsWhenTheClassExtendingTheParentIsNotFinal() {
+        Result result = compile(
+                "package test;\n"
+                + "@com.github.samblake.ludicrous.Ludicrous(parent = true)\n"
+                + "public class Person extends PersonBuilders {\n"
+                + "    public Person(String name) {}\n"
+                + "}\n");
+
+        assertThat(result.success, is(false));
+        assertThat(result.errors, containsString("Person must be final, sealed or non-sealed, as it extends the "
+                + "generated PersonBuilders, which is sealed"));
     }
 
     @Test
@@ -633,14 +847,18 @@ public class LudicrousProcessorTest {
     }
 
     private Result compile(String... sources) {
+        return compile(Collections.emptyList(), sources);
+    }
+
+    private Result compile(List<String> options, String... sources) {
         JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
         DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
         List<JavaFileObject> files = Arrays.stream(sources).map(Source::new).collect(Collectors.toList());
 
-        JavaCompiler.CompilationTask task = compiler.getTask(null, null, diagnostics,
-                Arrays.asList("-d", output.getRoot().getPath(), "-s", output.getRoot().getPath(),
-                        "-classpath", System.getProperty("java.class.path")),
-                null, files);
+        List<String> allOptions = new ArrayList<>(Arrays.asList("-d", output.getRoot().getPath(),
+                "-s", output.getRoot().getPath(), "-classpath", System.getProperty("java.class.path")));
+        allOptions.addAll(options);
+        JavaCompiler.CompilationTask task = compiler.getTask(null, null, diagnostics, allOptions, null, files);
         task.setProcessors(singletonList(new LudicrousProcessor()));
         boolean success = task.call();
 
@@ -663,7 +881,7 @@ public class LudicrousProcessorTest {
     }
 
     private static final class Source extends SimpleJavaFileObject {
-        private static final Pattern TYPE_NAME = Pattern.compile("(?:class|interface)\\s+(\\w+)");
+        private static final Pattern TYPE_NAME = Pattern.compile("(?:class|interface|record)\\s+(\\w+)");
 
         private final String code;
 
