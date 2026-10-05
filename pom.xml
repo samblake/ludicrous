@@ -4,7 +4,7 @@
 
     <groupId>com.github.samblake.ludicrous</groupId>
     <artifactId>ludicrous</artifactId>
-    <version>2.0.0</version>
+    <version>3.0.0</version>
 
     <name>Ludicrous</name>
     <description>Annotation processor that generates builders whose type tracks which arguments have been set</description>
