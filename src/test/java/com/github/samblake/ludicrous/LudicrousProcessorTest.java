@@ -738,6 +738,21 @@ public class LudicrousProcessorTest {
     }
 
     @Test
+    public void buildsAClassInTheDefaultPackage() {
+        Result result = compile(
+                "@com.github.samblake.ludicrous.Ludicrous\n"
+                + "public class Person {\n"
+                + "    public Person(String name) {}\n"
+                + "}\n",
+                "class Usage {\n"
+                + "    Person person = PersonBuilder.build(PersonBuilder.builder().withName(\"a\"));\n"
+                + "}\n");
+
+        assertThat(result.errors, result.success, is(true));
+        assertThat(generated("PersonBuilder.java"), containsString("public final class PersonBuilder"));
+    }
+
+    @Test
     public void failsWhenTheGeneratedBaseIsNotExtended() {
         Result result = compile(
                 "package test;\n"
