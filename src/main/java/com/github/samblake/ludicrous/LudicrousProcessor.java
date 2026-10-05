@@ -100,7 +100,10 @@ public class LudicrousProcessor extends AbstractProcessor {
         }
         for (Element element : elements) {
             Plan plan = blueprints.plan(element);
-            plan.problems.forEach(problem -> error(element, problem));
+            // Reported as one error, as JDK 8 only shows the first error at each position
+            if (!plan.problems.isEmpty()) {
+                error(element, String.join("\n", plan.problems));
+            }
             plan.blueprint
                     .filter(blueprint -> plan.problems.isEmpty())
                     .filter(this::isUniquelyNamed)
