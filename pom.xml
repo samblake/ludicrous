@@ -4,14 +4,15 @@
 
     <groupId>com.github.samblake.ludicrous</groupId>
     <artifactId>ludicrous</artifactId>
-    <version>1.0-SNAPSHOT</version>
+    <version>1.0.0</version>
 
     <name>Ludicrous</name>
     <description>Annotation processor that generates builders whose type tracks which arguments have been set</description>
 
     <properties>
-        <java.version>11</java.version>
-        <maven.compiler.release>${java.version}</maven.compiler.release>
+        <java.version>8</java.version>
+        <maven.compiler.source>${java.version}</maven.compiler.source>
+        <maven.compiler.target>${java.version}</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <javapoet.version>1.13.0</javapoet.version>
         <junit.version>4.13.2</junit.version>
